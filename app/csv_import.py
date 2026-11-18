@@ -47,10 +47,13 @@ def _parse_positive(raw: str) -> bool | None:
     return None
 
 
-def parse_tests(data: bytes) -> list[TestRecord]:
+def parse_tests(data: bytes, *, enforce_coverage: bool = True) -> list[TestRecord]:
     """解析并校验 CSV，返回按检验号去重后的记录列表。
 
     任何校验错误（含同号冲突）都抛出 CsvImportError —— 整份拒绝。
+
+    enforce_coverage=False 用于修订核查：修订后的病区/周次集合允许变化，
+    不再要求 2～3 个病区、2～3 个周次；去重与同号冲突检测仍然执行。
     """
     if not data:
         raise CsvImportError(["文件为空"])
@@ -125,16 +128,16 @@ def parse_tests(data: bytes) -> list[TestRecord]:
     if not seen:
         raise CsvImportError(["文件无有效数据行"])
 
-    wards = {r.ward for r in seen.values()}
-    weeks = {r.week for r in seen.values()}
-    if not 2 <= len(wards) <= 3:
-        errors.append(f"文件须覆盖 2～3 个病区，实际 {len(wards)} 个")
-    if not 2 <= len(weeks) <= 3:
-        errors.append(f"文件须覆盖 2～3 个周次，实际 {len(weeks)} 个")
-    if errors:
-        raise CsvImportError(errors)
+    if enforce_coverage:
+        wards = {r.ward for r in seen.values()}
+        weeks = {r.week for r in seen.values()}
+        if not 2 <= len(wards) <= 3:
+            errors.append(f"文件须覆盖 2～3 个病区，实际 {len(wards)} 个")
+        if not 2 <= len(weeks) <= 3:
+            errors.append(f"文件须覆盖 2～3 个周次，实际 {len(weeks)} 个")
+        if errors:
+            raise CsvImportError(errors)
     return list(seen.values())
-
 
 # ---------------------------------------------------------------- 交叉表
 

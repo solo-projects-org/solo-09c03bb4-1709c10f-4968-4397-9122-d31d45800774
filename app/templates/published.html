@@ -2,7 +2,80 @@
 {% block title %}已发布的安全表{% endblock %}
 {% block content %}
 <h2>已发布的安全表</h2>
-<p class="notice">发布时间：{{ t.published_at }}。本表已确认发布，不可替换或修改。</p>
+<p class="notice">发布时间：{{ t.published_at }}。本表已确认发布，不可替换或修改；
+   数据员可上传修订 CSV 进行核查，核查发现范围或公开值变化时将撤下本表。</p>
 
+{% if errors %}
+<div class="alert">
+  <p><strong>本次上传无效，现行状态未改变：</strong></p>
+  <ul>
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if result %}
+<div class="notice">
+  <p><strong>修订 {{ result.revision }} 核查完成：</strong>
+  {% if result.outcome == "withdrawn" %}
+    已发布信息发生变化，汇总表已撤下。
+  {% elif rev and rev.withdrawn %}
+    公开信息未变化，但本表此前已因修订 {{ rev.withdrawn_revision }} 撤下，
+    不会自动重新公开。
+  {% else %}
+    已发布信息未变化，汇总表继续供研究组使用。
+  {% endif %}</p>
+  {% if result.reasons %}
+  <ul>
+    {% for r in result.reasons %}<li>{{ r }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if rev and rev.withdrawn %}
+<div class="alert">
+  <p><strong>本汇总表已撤下，不再供研究组使用。</strong></p>
+  <p>撤下时间：{{ rev.withdrawn_at }}（基于修订 {{ rev.withdrawn_revision }} 的核查结论）。</p>
+  {% if rev.withdrawn_reason %}
+  <p>撤下原因：{{ rev.withdrawn_reason }}</p>
+  {% endif %}
+  <p>撤下状态不可自动恢复，也不会自动重新公开。</p>
+</div>
+{% endif %}
+
+{# 只有未撤下且从未撤下过时才展示表格；撤下后不泄露任何格计数。 #}
+{% if not (rev and rev.withdrawn) %}
 {% include "_table.html" %}
+{% endif %}
+
+{# 修订核查：不展示任何隐藏格数值；核对只针对公开信息。 #}
+<section class="revision">
+  <h3>修订核查</h3>
+  {% if rev and rev.withdrawn %}
+  <p class="notice">本表已撤下。仍可上传更新的完整修订继续核查；核查结论会记录，
+     但撤下状态不会自动恢复。</p>
+  {% endif %}
+  {% if rev %}
+  <p class="meta">已核查的最高修订号：{{ rev.max_revision }}；
+     最近核查时间：{{ rev.checked_at }}。
+     修订号须递增；同一修订号必须是同一份文件，较旧修订不能覆盖较新结论。</p>
+  {% else %}
+  <p class="meta">尚未进行修订核查。修订号须递增（首次可为 1）。</p>
+  {% endif %}
+  <form method="post" action="/revision-check" enctype="multipart/form-data" class="upload">
+    <label>修订号：
+      <input type="number" name="revision" min="1" step="1"
+             value="{{ (rev.max_revision + 1) if rev else 1 }}" required>
+    </label>
+    <label>该修订的完整检验 CSV：
+      <input type="file" name="file" accept=".csv,text/csv" required>
+    </label>
+    <button type="submit">上传并核查</button>
+  </form>
+  <p class="help">核查按检验号去重；同一检验号内容冲突则整份拒绝。
+     对照已发布表的病区、周次、公开格及行列合计：范围或公开值变化即撤下旧表；
+     未变化则继续供数。无效上传不改变现行状态。
+     核查页面不会显示隐藏格的任何计数。</p>
+</section>
 {% endblock %}

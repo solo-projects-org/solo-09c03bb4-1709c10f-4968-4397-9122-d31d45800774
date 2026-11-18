@@ -93,3 +93,11 @@ button.secondary { background: #fff; color: #1f4e79; }
   overflow-x: auto;
 }
 code { background: #eef1f4; padding: 0 0.25rem; border-radius: 3px; }
+
+.revision {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #d7dee6;
+}
+.revision h3 { font-size: 1rem; }
+.revision input[type="number"] { width: 6rem; }

@@ -5,19 +5,28 @@
     -> 可发布：保存待确认预览 -> 网页预览安全表 -> 确认发布（原子写入）
     -> 不可发布：仅提示原因，不展示、不保存任何表格内容
 确认发布后不再接受替换文件；发布结果存于 SQLite，重启后可查看。
+
+修订核查（已发布页）：
+    输入递增修订号 + 上传该修订的完整 CSV -> 按检验号去重、同号冲突整份拒绝
+    -> 对照已发布表的病区/周次集合、公开格数值、行列合计
+    -> 范围或公开值变化：撤下旧表（页面只显示撤下状态，不展示表格）
+    -> 未变化：继续供研究组使用
+    核查结论与最高修订号持久化；无效上传不改变现行状态。
 """
 
 from __future__ import annotations
 
 import os
+import re
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .csv_import import CsvImportError, build_crosstab, parse_tests
 from .db import Database
+from .revision import compare_with_publication, content_digest
 from .suppression import find_suppression
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -156,7 +165,74 @@ def create_app(db_path: str | None = None) -> FastAPI:
         pub = db.get_publication()
         if pub is None:
             return RedirectResponse("/upload", status_code=303)
-        return render(request, "published.html", t=pub)
+        return render(request, "published.html", t=pub,
+                      rev=db.get_revision_check(), result=None, errors=[])
+
+    @app.post("/revision-check", response_class=HTMLResponse)
+    async def revision_check(
+        request: Request,
+        revision: str | None = Form(None),
+        file: UploadFile | None = File(None),
+    ):
+        """核对修订后的完整 CSV 与已发布表；结论与最高修订号持久化。"""
+        pub = db.get_publication()
+        if pub is None:
+            return RedirectResponse("/upload", status_code=303)
+
+        def fail(status: int, errors: list[str], state=None):
+            # 无效上传：只提示，不改变现行核查状态
+            return render(request, "published.html", status=status, t=pub,
+                          rev=db.get_revision_check() if state is None else state,
+                          result=None, errors=errors)
+
+        rev_text = (revision or "").strip()
+        if not re.fullmatch(r"\d+", rev_text) or int(rev_text) < 1:
+            return fail(400, ["修订号须为大于等于 1 的整数"])
+        rev_no = int(rev_text)
+
+        if file is None:
+            return fail(400, ["请选择该修订的完整检验 CSV 文件"])
+        raw = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(raw) > MAX_UPLOAD_BYTES:
+            return fail(400, [
+                f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024 // 1024} MB）"
+            ])
+
+        try:
+            records = parse_tests(raw, enforce_coverage=False)
+        except CsvImportError as exc:
+            return fail(400, exc.errors)
+
+        wards, weeks, counts = build_crosstab(records)
+        digest = content_digest(records)
+        reasons = compare_with_publication(pub, wards, weeks, counts)
+        outcome = "withdrawn" if reasons else "unchanged"
+        reason_text = "；".join(reasons) if reasons else None
+
+        status, current = db.record_revision_check(
+            rev_no, digest, outcome, reason_text
+        )
+        if status == "same_revision":
+            return fail(409, [
+                f"修订号 {rev_no} 已有不同文件完成核查；"
+                "同一修订号必须是同一份文件，本次上传未改变任何状态。"
+            ], state=current)
+        if status == "stale":
+            return fail(409, [
+                f"修订号 {rev_no} 小于已核查的最高修订号 "
+                f"{current['max_revision']}；"
+                "较旧修订不能覆盖较新结论，本次上传未改变任何状态。"
+            ], state=current)
+        if status == "no_publication":
+            return RedirectResponse("/upload", status_code=303)
+
+        result = {
+            "revision": rev_no,
+            "outcome": outcome,
+            "reasons": reasons,
+        }
+        return render(request, "published.html", t=pub, rev=current,
+                      result=result, errors=[])
 
     @app.get("/health")
     def health():
